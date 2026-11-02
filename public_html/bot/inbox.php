@@ -1,4 +1,74 @@
 <?php
+session_start();
+
+// --- 1. SET YOUR USERS AND PASSWORDS HERE ---
+$allowed_users = [
+    'barry'  => 'BarryPass2026',
+    'george' => 'GeorgePass2026',
+    'admin'  => '2026' // Change 'admin' to your actual name if you prefer
+];
+
+// --- 2. LOGOUT LOGIC ---
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: inbox.php");
+    exit;
+}
+
+// --- 3. LOGIN LOGIC ---
+$error_msg = "";
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username']) && isset($_POST['password'])) {
+    $user = strtolower(trim($_POST['username']));
+    $pass = $_POST['password'];
+
+    // Check if the username exists and the password matches
+    if (array_key_exists($user, $allowed_users) && $allowed_users[$user] === $pass) {
+        $_SESSION['logged_in'] = true;
+        $_SESSION['active_user'] = $user;
+        header("Location: inbox.php"); // Refresh the page to clear the form submission
+        exit;
+    } else {
+        $error_msg = "Incorrect username or password.";
+    }
+}
+
+// --- 4. SHOW LOGIN SCREEN IF NOT LOGGED IN ---
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>CEA Inbox Login</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .login-box { background: #fff; padding: 40px; border-radius: 10px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); width: 100%; max-width: 320px; text-align: center; }
+            .login-box h2 { color: #2B3F99; margin-top: 0; margin-bottom: 25px; }
+            .login-box input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; }
+            .login-box button { background-color: #2B3F99; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; width: 100%; font-size: 16px; font-weight: bold; margin-top: 15px; }
+            .login-box button:hover { background-color: #1a2766; }
+            .error { color: #d93025; background: #fce8e6; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 14px; }
+        </style>
+    </head>
+    <body>
+        <div class="login-box">
+            <h2>CEA Inbox</h2>
+            <?php if ($error_msg) echo "<div class='error'>$error_msg</div>"; ?>
+            <form method="POST">
+                <input type="text" name="username" placeholder="Username" required autofocus>
+                <input type="password" name="password" placeholder="Password" required>
+                <button type="submit">Log In</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit; // This stops the rest of the inbox from loading!
+}
+
+$current_view = $_GET['view'] ?? 'all';
+
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
@@ -37,17 +107,38 @@ function formatChatDate($timestamp) {
 // --- DETECT ACTIVE CHAT EARLY FOR SIDEBAR HIGHLIGHTING ---
 $current_chat = isset($_GET['chat']) ? $_GET['chat'] : null;
 
-// --- AJAX HANDLER FOR STARRING CHATS ---
-if (isset($_GET['action']) && $_GET['action'] === 'toggle_star' && isset($_GET['phone'])) {
-    $phone = $_GET['phone'];
-    $current_status = isset($_GET['status']) && $_GET['status'] == '1' ? 0 : 1;
+// --- BACKEND ACTION HANDLERS FOR ARCHIVE & STAR ---
+if (isset($_GET['action'])) {
+    $action = $_GET['action'];
+    $phone = isset($_GET['phone']) ? $_GET['phone'] : '';
+    $current_status = isset($_GET['status']) ? intval($_GET['status']) : 0;
     
-    $stmt = $conn->prepare("UPDATE bot_states SET is_starred = ? WHERE phone = ?");
-    $stmt->bind_param("is", $current_status, $phone);
-    $stmt->execute();
-    
-    echo $current_status; 
-    exit();
+    if (!empty($phone)) {
+        // Calculate target status (flip 0 to 1, or 1 to 0)
+        $new_status = ($current_status === 1) ? 0 : 1;
+
+        if ($action === 'toggle_archive') {
+            $stmt = $conn->prepare("UPDATE bot_states SET is_archived = ? WHERE phone = ?");
+            if ($stmt) {
+                $stmt->bind_param("is", $new_status, $phone);
+                $stmt->execute();
+                $stmt->close();
+            }
+            echo $new_status;
+            exit; // Stop processing the rest of the page for AJAX/Fetch requests
+        }
+        
+        if ($action === 'toggle_star') {
+            $stmt = $conn->prepare("UPDATE bot_states SET is_starred = ? WHERE phone = ?");
+            if ($stmt) {
+                $stmt->bind_param("is", $new_status, $phone);
+                $stmt->execute();
+                $stmt->close();
+            }
+            echo $new_status; // Returns '1' or '0' back to your JavaScript
+            exit; // Stop processing the rest of the page
+        }
+    }
 }
 
 // ONLY run this when the form is submitted
@@ -129,6 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // --- 3. SEND TO WHATSAPP & SAVE TO DATABASE ---
+    // --- 3. SEND TO WHATSAPP & SAVE TO DATABASE ---
     if (!empty($data)) {
         // Send to WhatsApp
         $ch = curl_init($url);
@@ -139,12 +231,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'Authorization: Bearer ' . $access_token,
             'Content-Type: application/json'
         ]);
-        curl_exec($ch);
+        
+        // 1. Capture the response from Meta instead of ignoring it
+        $response = curl_exec($ch); 
         curl_close($ch);
 
-        // Log the message to database
-        $stmt = $conn->prepare("INSERT INTO messages (student_phone, sender, message_text, message_type, media_url) VALUES (?, 'agent', ?, ?, ?)");
-        $stmt->bind_param("ssss", $student_phone, $reply_text, $message_type, $media_url_db);
+        // 2. Decode the response and grab the Meta Message ID
+        $response_data = json_decode($response, true);
+        $meta_message_id = isset($response_data['messages'][0]['id']) ? $response_data['messages'][0]['id'] : null;
+
+        // 3. Log the message to database WITH the message_id
+        // NOTE: Make sure your 'messages' table has a 'message_id' column!
+        $stmt = $conn->prepare("INSERT INTO messages (student_phone, sender, message_text, message_type, media_url, message_id) VALUES (?, 'agent', ?, ?, ?, ?)");
+        $stmt->bind_param("sssss", $student_phone, $reply_text, $message_type, $media_url_db, $meta_message_id);
         $stmt->execute();
     }
     
@@ -226,9 +325,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-bottom: 3px solid transparent;
             transition: all 0.2s ease;
         }
-
-        .nav-link:hover { color: #ffffff; }
-        .nav-link.active { color: #ffffff; border-bottom-color: var(--brand-gold); }
+        
+        
+   
+        .nav-link:hover { color: #ffffff;
+         transform: translateY(-2px); /* Lifts the button up slightly */
+ }
+    
+        .nav-link.active { color: #ffffff; border-bottom-color: var(--brand-gold); 
+           transform: translateY(0); /* Snaps it back down when clicked */
+ 
+        }
 
         /* --- Sub Navigation Breadcrumb Styles --- */
         #sub-nav {
@@ -325,6 +432,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: all 0.2s;
         }
 
+
+.filter-btn:hover {
+    transform: translateY(-2px); /* Lifts the button up slightly */
+   
+}
+
+.filter-btn.active:active {
+    transform: translateY(0); /* Snaps it back down when clicked */
+   
+}
+
         .filter-btn.active { background: var(--brand-blue); color: white; border-color: var(--brand-gold); }
 
         .chat-list { flex-grow: 1; overflow-y: auto; }
@@ -335,7 +453,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-bottom: 1px solid #f5f6f6;
             transition: background 0.2s ease;
             border-left: 4px solid transparent;
-            position: relative; 
+            position: relative;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 15px;
         }
 
         .chat-item::before {
@@ -390,6 +511,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        
+        
 
        .unread-badge {
             background-color: var(--brand-gold); 
@@ -441,14 +564,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             justify-content: space-between;
             align-items: center;
         }
+        
+        
 
-        #msg-history { 
+
+
+      #msg-history { 
             flex-grow: 1; 
             overflow-y: auto; 
             padding: 30px; 
             display: flex; 
             flex-direction: column; 
-            background-color: #fafbfc; 
+            background-color: #ffffff; 
+            
+            /* 1. The Watermark Effect: Overlays a 90% solid white layer on top of the logo */
+            background-image: linear-gradient(rgba(255, 255, 255, 0.90), rgba(255, 255, 255, 0.90)), url('assets/welcome_logo.png'); 
+            
+            /* 2. Positioned to the right: '90%' pushes it to the right, 'center' keeps it vertically middle */
+            background-position: 65% center; 
+            
+            background-repeat: no-repeat; 
+            background-size: 520px; 
+            background-attachment: fixed; 
         }
 
         .message { 
@@ -532,7 +669,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transition: background 0.2s;
         }
         
-        .chat-input-area button:hover { background: var(--brand-brown); }
+        /* Reset button styles for the new attach icon */
+.chat-input-area .attach-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease;
+}
+
+/* Optional: Slight hover effect for the plus button */
+.chat-input-area .attach-btn:hover {
+    transform: scale(1.1);
+}
+        
+        
 
         .empty-state { 
             flex-grow: 1; 
@@ -558,6 +712,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         .header-icon-btn:hover { color: var(--brand-gold); }
         .header-icon-btn:active { transform: scale(0.95); }
+        
+        /* --- Logout Button --- */
+.logout-btn {
+    color: #e63946; /* A clean, modern red */
+    text-decoration: none;
+    font-weight: bold;
+    border: 2px solid #e63946;
+    padding: 8px 20px;
+    border-radius: 10px; /* Matches the rounded look of your other inputs */
+    transition: all 0.2s ease;
+    transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.2s ease;
+    font-size: 0.9em;
+}
+
+.logout-btn:hover {
+    transform: translateY(-2px); /* Lifts the button up slightly */
+    box-shadow: 0 4px 12px rgba(230, 57, 70, 0.15); /* Adds a soft drop shadow beneath it */
+}
+
+.logout-btn:active {
+    transform: translateY(0); /* Snaps it back down when clicked */
+    box-shadow: 0 2px 4px rgba(230, 57, 70, 0.1);
+}
+        
     </style>
 </head>
 <body>
@@ -567,46 +745,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
            <img src="assets/inbox_logo.png" alt="Career Excel Academy" class="nav-logo">
         </div>
         <div class="nav-links">
-            <a href="#" class="nav-link active">All</a>
-            <a href="#" class="nav-link">George</a>
-            <a href="#" class="nav-link">Barry</a>
+            <a href="inbox.php?view=all" class="nav-link <?php echo $current_view === 'all' ? 'active' : ''; ?>">All</a>
+            <a href="inbox.php?view=george" class="nav-link <?php echo $current_view === 'george' ? 'active' : ''; ?>">George</a>
+            <a href="inbox.php?view=barry" class="nav-link <?php echo $current_view === 'barry' ? 'active' : ''; ?>">Barry</a>
         </div>
+        
+     <a href="inbox.php?logout=true" class="logout-btn">Logout</a>
     </div>
 
+
+
     <div id="sub-nav">
-        <span id="breadcrumb-text">Leads / All</span>
+        <span id="breadcrumb-text">Leads / <?php echo ucfirst($current_view); ?></span>
     </div>
 
     <div class="main-container">
         
-        <div id="sidebar">
-            <?php 
-            // UPDATED QUERY: Safely selects the actual text and type of the absolute latest message
+        <div id="sidebar" id="inbox-container">
+           <?php 
+            // 1. Set up the dynamic filter based on the top nav buttons
+            $where_clause = "1=1"; // Shows everything by default
+            
+            if ($current_view === 'george') {
+                $where_clause = "b.assigned_to = 'george'";
+            } elseif ($current_view === 'barry') {
+                $where_clause = "b.assigned_to = 'barry'";
+            }
+
+       // 2. Execute the filtered query
             $active = $conn->query("
-                SELECT b.phone, b.name, b.is_starred, 
+                SELECT b.phone, b.name, b.is_starred, b.is_archived,
                        (SELECT COUNT(*) FROM messages WHERE student_phone = b.phone AND sender = 'student' AND is_read = 0) as unread_count, 
                        MAX(m.timestamp) as last_msg_time,
                        (SELECT message_text FROM messages WHERE student_phone = b.phone ORDER BY timestamp DESC, id DESC LIMIT 1) as last_msg_text,
                        (SELECT message_type FROM messages WHERE student_phone = b.phone ORDER BY timestamp DESC, id DESC LIMIT 1) as last_msg_type
                 FROM bot_states b 
                 LEFT JOIN messages m ON b.phone = m.student_phone 
+                WHERE $where_clause
                 GROUP BY b.phone 
                 ORDER BY last_msg_time DESC
-            ");
+            ");;
+            
             $conversation_count = $active ? $active->num_rows : 0;
             ?>
             <div class="sidebar-header">
                 <div class="sidebar-header-left">
                     Conversations
-                    <span class="chat-counter"><?php echo $conversation_count; ?></span>
+                   
                 </div>
-                <button class="header-icon-btn" title="View Archived Conversations">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 8v13H3V8"></path>
-                    <path d="M1 3h22v5H1z"></path>
-                    <path d="M10 12h4"></path>
-                </svg>
-                </button>
+             <button class="header-icon-btn" id="sidebar-archive-view-toggle" title="Toggle Archived Conversations">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 8v13H3V8"></path>
+        <path d="M1 3h22v5H1z"></path>
+        <path d="M10 12h4"></path>
+    </svg>
+</button>
             </div>
             
             <div class="search-container">
@@ -619,60 +812,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <button class="filter-btn" data-filter="starred">Starred</button>
             </div>
 
-            <div class="chat-list" id="chat-list-container">
-            <?php 
-            if ($active) {
-                while($row = $active->fetch_assoc()): 
-                    $is_starred = isset($row['is_starred']) ? $row['is_starred'] : 0;
-                    
-                    $is_active = ($current_chat === $row['phone']);
-                    $formatted_time = formatChatDate($row['last_msg_time']);
+<div class="chat-list" id="chat-list-container">
+<?php 
+if ($active) {
+    while($row = $active->fetch_assoc()): 
+        $is_starred = isset($row['is_starred']) ? $row['is_starred'] : 0;
+        $is_archived = isset($row['is_archived']) ? $row['is_archived'] : 0;
+        $formatted_time = formatChatDate($row['last_msg_time']);
 
-                    // Get last message text or fallback to media tags if text is empty
-                    $last_msg = $row['last_msg_text'] ?? '';
-                    if (empty(trim($last_msg)) && !empty($row['last_msg_type'])) {
-                        if ($row['last_msg_type'] === 'image') {
-                            $last_msg = '📷 Image';
-                        } elseif ($row['last_msg_type'] === 'document') {
-                            $last_msg = '📎 Document';
-                        }
-                    }
-
-                    // Enforce the strict 30-character limit cut-off
-                    if (mb_strlen($last_msg) > 30) {
-                        $last_msg = mb_substr($last_msg, 0, 30) . '...';
-                    }
-                ?>
-                    <div class="chat-item <?php echo $is_active ? 'active' : ''; ?>" data-unread="<?php echo $row['unread_count']; ?>" data-starred="<?php echo $is_starred; ?>">
-                        <a class="chat-link" href="inbox.php?chat=<?php echo urlencode($row['phone']); ?>">
-                            <div class="chat-name-row">
-                                <div style="display: flex; align-items: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding-right: 5px;">
-                                    <span class="chat-name"><?php echo htmlspecialchars($row['name']); ?></span>
-                                    <span style="font-size: 0.8em; color: var(--text-muted); margin-left: 8px; font-weight: normal;"><?php echo htmlspecialchars($row['phone']); ?></span>
-                                </div>
-                                
-                                <span class="unread-badge" <?php if($row['unread_count'] == 0) echo 'style="display:none;"'; ?>>
-                                    <?php echo $row['unread_count']; ?>
-                                </span>
-                                
-                                <span class="chat-time-sidebar"><?php echo $formatted_time; ?></span>
-                            </div>
-                            <span class="chat-last-message"><?php echo htmlspecialchars($last_msg); ?></span>
-                        </a>
-                        
-                        <button class="star-btn <?php echo $is_starred ? 'is-starred' : ''; ?>" 
-                                data-phone="<?php echo htmlspecialchars($row['phone']); ?>" 
-                                data-status="<?php echo $is_starred; ?>"
-                                title="Star/Unstar Chat">
-                            ★
-                        </button>
-                    </div>
-                <?php endwhile; 
-            } else {
-                echo "<div style='padding: 20px; color: red;'>Database execution error or query malformed.</div>";
+        // Get last message text or fallback to media tags if text is empty
+        $last_msg = $row['last_msg_text'] ?? '';
+        if (empty(trim($last_msg)) && !empty($row['last_msg_type'])) {
+            if ($row['last_msg_type'] === 'image') {
+                $last_msg = '📷 Image';
+            } elseif ($row['last_msg_type'] === 'document') {
+                $last_msg = '📎 Document';
             }
-            ?>
-            </div>
+        }
+
+        // Enforce the strict 30-character limit cut-off
+        if (mb_strlen($last_msg) > 30) {
+            $last_msg = mb_substr($last_msg, 0, 30) . '...';
+        }
+    ?>
+        <div class="chat-item" 
+             data-phone="<?php echo htmlspecialchars($row['phone']); ?>" 
+             data-archived="<?php echo $is_archived; ?>" 
+             data-unread="<?php echo $row['unread_count']; ?>" 
+             data-starred="<?php echo $is_starred; ?>"
+             style="<?php echo $is_archived ? 'display: none;' : 'display: flex;'; ?>">
+             
+            <a class="chat-link" href="inbox.php?chat=<?php echo urlencode($row['phone']); ?>">
+                <div class="chat-name-row">
+                    <div style="display: flex; align-items: center; padding-right: 10px; flex: 1; min-width: 0;">
+                        <span class="chat-name" style="white-space: nowrap; flex-shrink: 0;">
+                            <?php echo htmlspecialchars($row['name']); ?>
+                        </span>
+                        <span style="font-size: 0.8em; color: var(--text-muted); margin-left: 8px; font-weight: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;">
+                            <?php echo htmlspecialchars($row['phone']); ?>
+                        </span>
+                    </div>
+                    
+                    <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                        <span class="unread-badge" <?php if($row['unread_count'] == 0) echo 'style="display:none;"'; ?>>
+                            <?php echo $row['unread_count']; ?>
+                        </span>
+                        <span class="chat-time-sidebar">
+                            <?php echo $formatted_time; ?>
+                        </span>
+                    </div>
+                </div>
+                <span class="chat-last-message"><?php echo htmlspecialchars($last_msg); ?></span>
+            </a>
+            
+            <button class="star-btn <?php echo $is_starred ? 'is-starred' : ''; ?>" 
+                    data-phone="<?php echo htmlspecialchars($row['phone']); ?>" 
+                    data-status="<?php echo $is_starred; ?>"
+                    data-starred="<?php echo $is_starred; ?>"
+                    title="Star/Unstar Chat"
+                    style="<?php echo $is_starred ? 'color: var(--brand-gold);' : ''; ?>">
+                ★
+            </button>
+        </div>
+    <?php endwhile; 
+} else {
+    echo "<div style='padding: 20px; color: red;'>Database execution error or query malformed.</div>";
+}
+?>
+</div>
         </div>
 
         <div id="chat-window">
@@ -686,75 +893,155 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 
                 $conn->query("UPDATE messages SET is_read = 1 WHERE student_phone = '$current_chat' AND sender = 'student'");
+                
+                // --- NEW CODE: SEND READ RECEIPT TO META ---
+                $msg_id_query = $conn->query("SELECT message_id FROM messages WHERE student_phone = '$current_chat' AND sender = 'student' AND message_id IS NOT NULL ORDER BY timestamp DESC LIMIT 1");
+                
+                if ($msg_id_query && $msg_id_query->num_rows > 0) {
+                    $last_msg = $msg_id_query->fetch_assoc();
+                    $last_msg_id = $last_msg['message_id']; 
+                    
+                    // Define your token here so this block can use it
+                    $access_token = 'EAANeDzAb8iQBRSOhmrZAc3UXvt7uEquOj67ZCVKlS4ZBHxmJkIuLrWNoOTPWmdUgQcthaSVGMU8pu4vLgILge4x6ry62N0dLWrK7RoRb39ZC5ijZAZBZB8MIXGTFKslfVVQxo18cikxZB4ooSvI0f5vhidHW3PRNkZCOEVKSc5DSl6CDXgLCRBXLrBEgX2wHlVgZDZD'; 
 
-                // Fetch Student Name
-                $chat_name = $current_chat;
-                $stmt_name = $conn->prepare("SELECT name FROM bot_states WHERE phone = ?");
-                if ($stmt_name) {
-                    $stmt_name->bind_param("s", $current_chat);
-                    $stmt_name->execute();
-                    $stmt_name->bind_result($db_name_result);
-                    if ($stmt_name->fetch() && !empty($db_name_result)) {
+                    $read_data = [
+                        'messaging_product' => 'whatsapp',
+                        'status' => 'read',
+                        'message_id' => $last_msg_id
+                    ];
+
+                    $ch = curl_init("https://graph.facebook.com/v17.0/1192797650583688/messages");
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($read_data));
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                        'Authorization: Bearer ' . $access_token,
+                        'Content-Type: application/json'
+                    ]);
+                    curl_exec($ch);
+                    curl_close($ch);
+                }
+                // --- END NEW CODE ---
+
+          // Fetch Student Name, Archive, AND Star Status
+            $chat_name = $current_chat;
+            $is_chat_archived = 0; // Default to active
+            $is_chat_starred = 0;  // Default to unstarred
+            
+            $stmt_name = $conn->prepare("SELECT name, is_archived, is_starred FROM bot_states WHERE phone = ?");
+            if ($stmt_name) {
+                $stmt_name->bind_param("s", $current_chat);
+                $stmt_name->execute();
+                $stmt_name->bind_result($db_name_result, $db_archived_result, $db_starred_result);
+                if ($stmt_name->fetch()) {
+                    if (!empty($db_name_result)) {
                         $chat_name = $db_name_result;
                     }
-                    $stmt_name->close();
+                    $is_chat_archived = $db_archived_result; 
+                    $is_chat_starred = $db_starred_result;
                 }
+                $stmt_name->close();
+            }
 
-                $history = $conn->query("SELECT * FROM messages WHERE student_phone = '$current_chat' ORDER BY timestamp ASC");
+            // SECURED: Prepared statement to fetch chat history safely
+            $stmt_hist = $conn->prepare("SELECT * FROM messages WHERE student_phone = ? ORDER BY timestamp ASC");
+            $stmt_hist->bind_param("s", $current_chat);
+            $stmt_hist->execute();
+            $history = $stmt_hist->get_result();
             ?>
-               <div class="chat-header">
+             
+            <div class="chat-header">
                 <span><?php echo htmlspecialchars($chat_name); ?></span>
-                <button class="header-icon-btn" title="Archive this chat" data-phone="<?php echo htmlspecialchars($current_chat); ?>">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 8v13H3V8"></path>
-                        <path d="M1 3h22v5H1z"></path>
-                        <path d="M10 12h4"></path>
+                
+                <div>
+                    <!-- ARCHIVE BUTTON -->
+                    <button class="header-icon-btn archive-toggle-btn"
+                            title="<?php echo $is_chat_archived ? 'Unarchive this chat' : 'Archive this chat'; ?>" 
+                            data-phone="<?php echo htmlspecialchars($current_chat); ?>"
+                            data-archived="<?php echo $is_chat_archived; ?>"
+                            style="<?php echo $is_chat_archived ? 'color: var(--brand-gold); margin-left: 10px;' : 'margin-left: 10px;'; ?>">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 8v13H3V8"></path>
+                            <path d="M1 3h22v5H1z"></path>
+                            <path d="M10 12h4"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <div id="msg-history">
+                <?php while($msg = $history->fetch_assoc()): ?>
+                    <div class="message <?php echo $msg['sender']; ?>">
+                        <div class="sender-name"><?php echo ucfirst($msg['sender']); ?></div>
+                        
+                        <?php 
+                        if (!empty($msg['media_url'])): 
+                            $media_filename = basename(str_replace('\\', '/', $msg['media_url']));
+                            $media_link = 'media.php?file=' . rawurlencode($media_filename);
+                            if ($msg['message_type'] === 'document'): ?>
+                                <a href="<?php echo htmlspecialchars($media_link); ?>" target="_blank" rel="noopener" style="display: block; margin-bottom: 5px;">📎 Download Document</a>
+                            <?php else: ?>
+                                <img src="<?php echo htmlspecialchars($media_link); ?>" style="max-width: 100%; border-radius: 8px; margin-bottom: 5px; display: block;">
+                            <?php endif; 
+                        endif; ?>
+
+                        <?php if (!empty($msg['message_text'])): ?>
+                            <div class="message-text"><?php echo nl2br(htmlspecialchars($msg['message_text'])); ?></div>
+                        <?php endif; ?>
+                        
+                        <div class="message-time">
+                            <?php echo date('g:i A', strtotime($msg['timestamp'])); ?>
+                            <?php
+                            if ($msg['sender'] == 'agent') {
+                                if (isset($msg['status']) && $msg['status'] == 'read') {
+                                    echo "<span style='color: #34b7f1; margin-left: 4px;'>✔✔</span>";
+                                } elseif (isset($msg['status']) && $msg['status'] == 'delivered') {
+                                    echo "<span style='color: #999; margin-left: 4px;'>✔✔</span>";
+                                } else {
+                                    echo "<span style='color: #999; margin-left: 4px;'>✔</span>";
+                                }
+                            }
+                            ?>
+                        </div>
+                    </div>
+                <?php endwhile; ?>
+                <?php $stmt_hist->close(); ?>
+            </div>
+                        
+            <div id="image-preview-container" style="display: none; padding: 10px 30px; background: #f9f9fb; border-top: 1px solid var(--border); align-items: center;">
+                <img id="image-preview" src="" style="max-height: 80px; border-radius: 8px; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <span id="file-name-preview" style="margin-left: 15px; font-size: 0.9em; color: var(--text-muted); font-weight: bold;"></span>
+                <button type="button" onclick="clearPreview()" style="background: none; color: #d9534f; border: none; cursor: pointer; padding: 5px 10px; margin-left: auto; font-weight: bold;">✖ Remove File</button>
+            </div>
+
+            <form class="chat-input-area" method="POST" enctype="multipart/form-data" id="chat-form">
+                <input type="hidden" name="student_phone" value="<?php echo htmlspecialchars($current_chat); ?>">
+                <input type="file" name="file_upload" id="file_upload" style="display:none;" accept="image/*,.pdf,.doc,.docx">
+                
+                <button type="button" class="attach-btn" onclick="document.getElementById('file_upload').click()" title="Attach File">
+                    <svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="12" cy="12" r="10" fill="#ffffff" stroke="#000000" stroke-width="1.5" />
+                        <path d="M12 7v10M7 12h10" stroke="#007bff" stroke-width="2" stroke-linecap="round" />
                     </svg>
                 </button>
-                </div>
                 
-                <div id="msg-history">
-    <?php while($msg = $history->fetch_assoc()): ?>
-        <div class="message <?php echo $msg['sender']; ?>">
-            <div class="sender-name"><?php echo ucfirst($msg['sender']); ?></div>
-            
-        <?php 
-            if (!empty($msg['media_url'])): 
-                if ($msg['message_type'] === 'document'): ?>
-                    <a href="<?php echo htmlspecialchars($msg['media_url']); ?>" target="_blank" style="display: block; margin-bottom: 5px;">📎 Download Document</a>
-                <?php else: ?>
-                    <img src="<?php echo htmlspecialchars($msg['media_url']); ?>" style="max-width: 100%; border-radius: 8px; margin-bottom: 5px; display: block;">
-                <?php endif; 
-            endif; ?>
+                <input type="text" name="reply_text" class="chat-text-input" placeholder="Type a reply...">
+                <button type="submit" id="send-btn" class="send-btn">Send</button>
+            </form>
 
-            <?php 
-            if (!empty($msg['message_text'])): ?>
-                <div class="message-text"><?php echo nl2br(htmlspecialchars($msg['message_text'])); ?></div>
-            <?php endif; ?>
-            
-            <div class="message-time"><?php echo date('g:i A', strtotime($msg['timestamp'])); ?></div>
-        </div>
-    <?php endwhile; ?>
-</div>
-                
-<div id="image-preview-container" style="display: none; padding: 10px 30px; background: #f9f9fb; border-top: 1px solid var(--border); align-items: center;">
-    <img id="image-preview" src="" style="max-height: 80px; border-radius: 8px; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <span id="file-name-preview" style="margin-left: 15px; font-size: 0.9em; color: var(--text-muted); font-weight: bold;"></span>
-    <button type="button" onclick="clearPreview()" style="background: none; color: #d9534f; border: none; cursor: pointer; padding: 5px 10px; margin-left: auto; font-weight: bold;">✖ Remove File</button>
+        <?php else: ?>
+            <div class="empty-state">
+                <img src="assets/welcome_logo.png" alt="Welcome" style="width: 150px; height: auto; margin-bottom: 20px;">
+                <h2>Welcome to the CEA Shared Inbox</h2>
+                <p>Select a chat from the sidebar to start replying.</p>
+            </div>
+        <?php endif; ?>
+    </div>
 </div>
 
-<form class="chat-input-area" method="POST" enctype="multipart/form-data" id="chat-form">
-    <input type="hidden" name="student_phone" value="<?php echo htmlspecialchars($current_chat); ?>">
-    
-    <input type="file" name="file_upload" id="file_upload" style="display:none;" accept="image/*,.pdf,.doc,.docx">
-    <button type="button" onclick="document.getElementById('file_upload').click()" title="Attach File">📎</button>
-    
-    <input type="text" name="reply_text" placeholder="Type a reply...">
-    <button type="submit" id="send-btn">Send</button>
-</form>
-
+<!-- FILE ATTACHMENT & PREVIEW SCRIPT -->
 <script>
-document.getElementById('file_upload').addEventListener('change', function() {
+document.getElementById('file_upload')?.addEventListener('change', function() {
     const previewContainer = document.getElementById('image-preview-container');
     const previewImg = document.getElementById('image-preview');
     const fileNameSpan = document.getElementById('file-name-preview');
@@ -778,92 +1065,56 @@ document.getElementById('file_upload').addEventListener('change', function() {
 });
 
 function clearPreview() {
-    document.getElementById('file_upload').value = '';
+    const fileInput = document.getElementById('file_upload');
+    if (fileInput) fileInput.value = '';
     document.getElementById('image-preview-container').style.display = 'none';
     document.getElementById('image-preview').src = '';
 }
 
-document.getElementById('chat-form').addEventListener('submit', function() {
+document.getElementById('chat-form')?.addEventListener('submit', function() {
     const btn = document.getElementById('send-btn');
-    btn.innerHTML = 'Sending...';
-    btn.style.opacity = '0.7';
-    btn.disabled = true;
+    if (btn) {
+        btn.innerHTML = 'Sending...';
+        btn.style.opacity = '0.7';
+        btn.disabled = true;
+    }
 });
 </script>
 
-<script>
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentChat = urlParams.get('chat');
-    const historyDiv = document.getElementById('msg-history');
-
-    function scrollToBottom() {
-        if (historyDiv) {
-            historyDiv.scrollTop = historyDiv.scrollHeight;
-        }
-    }
-
-    window.onload = scrollToBottom;
-
-    if (currentChat) {
-        setInterval(function() {
-            fetch('inbox.php?chat=' + currentChat)
-                .then(response => response.text())
-                .then(html => {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(html, 'text/html');
-                    const newHistory = doc.getElementById('msg-history');
-                    
-                    if (newHistory && historyDiv) {
-                        const isScrolledToBottom = historyDiv.scrollHeight - historyDiv.clientHeight <= historyDiv.scrollTop + 50;
-                        historyDiv.innerHTML = newHistory.innerHTML;
-                        if (isScrolledToBottom) scrollToBottom();
-                    }
-                })
-                .catch(error => console.error('Error:', error));
-        }, 3000);
-    }
-</script>
-
-          <?php else: ?>
-                <div class="empty-state">
-                    <img src="assets/welcome_logo.png" alt="Welcome" style="width: 150px; height: auto; margin-bottom: 20px;">
-                    
-                    <h2>Welcome to the CEA Shared Inbox</h2>
-                    <p>Select a chat from the sidebar to start replying.</p>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
+<!-- MASTER APPLICATION LOGIC & SINGLE SYNC ENGINE -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('chat-search');
     const filterBtns = document.querySelectorAll('.filter-btn');
+    const viewArchiveBtn = document.getElementById('sidebar-archive-view-toggle');
     const historyDiv = document.getElementById('msg-history');
     
     let currentFilter = 'all';
+    let showingArchived = false;
 
+    // --- MASTER FILTER ENGINE ---
     function applyFilters() {
-        const searchText = searchInput ? searchInput.value.toLowerCase() : '';
+        const searchText = searchInput ? searchInput.value.toLowerCase().trim() : '';
         const chatItems = document.querySelectorAll('.chat-item'); 
 
         chatItems.forEach(item => {
-            const textContent = item.textContent.toLowerCase();
+            const name = item.querySelector('.chat-name')?.textContent.toLowerCase() || '';
+            const phone = item.getAttribute('data-phone')?.toLowerCase() || '';
+            const lastMsg = item.querySelector('.chat-last-message')?.textContent.toLowerCase() || '';
+            
             const isStarred = item.getAttribute('data-starred') === '1';
+            const isArchived = item.getAttribute('data-archived') === '1';
             const unreadCount = parseInt(item.getAttribute('data-unread') || '0', 10);
             const isUnread = unreadCount > 0; 
-            
-            let matchesSearch = textContent.includes(searchText);
-            let matchesFilter = true;
 
-            if (currentFilter === 'unread' && !isUnread) matchesFilter = false;
-            if (currentFilter === 'starred' && !isStarred) matchesFilter = false;
+            if (showingArchived && !isArchived) { item.style.display = 'none'; return; }
+            if (!showingArchived && isArchived) { item.style.display = 'none'; return; }
 
-            if (matchesSearch && matchesFilter) {
-                item.style.display = 'flex';
-            } else {
-                item.style.display = 'none';
-            }
+            if (currentFilter === 'unread' && !isUnread) { item.style.display = 'none'; return; }
+            if (currentFilter === 'starred' && !isStarred) { item.style.display = 'none'; return; }
+
+            const matchesSearch = name.includes(searchText) || phone.includes(searchText) || lastMsg.includes(searchText);
+            item.style.display = matchesSearch ? 'flex' : 'none';
         });
     }
 
@@ -879,6 +1130,107 @@ document.addEventListener('DOMContentLoaded', function() {
             applyFilters();
         });
     });
+
+    if (viewArchiveBtn) {
+        viewArchiveBtn.addEventListener('click', function() {
+            showingArchived = !showingArchived;
+            this.style.color = showingArchived ? 'var(--brand-gold)' : '';
+            applyFilters();
+        });
+    }
+
+    // --- HANDLE STARRING CHATS ---
+    document.addEventListener('click', function(e) {
+        const starBtn = e.target.closest('.star-btn');
+        if (starBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const phone = starBtn.getAttribute('data-phone');
+            const currentStatus = starBtn.getAttribute('data-starred') || starBtn.getAttribute('data-status');
+            
+            fetch(`inbox.php?action=toggle_star&phone=${phone}&status=${currentStatus}`)
+                .then(response => response.text())
+                .then(newStatus => {
+                    const isNowStarred = newStatus.trim() === '1';
+                    const targetState = isNowStarred ? '1' : '0';
+
+                    starBtn.setAttribute('data-starred', targetState);
+                    starBtn.setAttribute('data-status', targetState);
+                    starBtn.style.color = isNowStarred ? 'var(--brand-gold)' : '';
+                    
+                    const parentChatItem = starBtn.closest('.chat-item');
+                    if (parentChatItem) {
+                        parentChatItem.setAttribute('data-starred', targetState);
+                    }
+                    applyFilters();
+                })
+                .catch(err => console.error('Error toggling star:', err));
+        }
+    });
+
+    // --- HANDLE ARCHIVING CHATS ---
+    const archiveBtn = document.querySelector('.chat-header .archive-toggle-btn');
+    if (archiveBtn) {
+        archiveBtn.addEventListener('click', function() {
+            const phone = this.getAttribute('data-phone');
+            const currentStatus = this.getAttribute('data-archived'); 
+            
+            fetch(`inbox.php?action=toggle_archive&phone=${phone}&status=${currentStatus}`)
+                .then(response => response.text())
+                .then(() => {
+                    window.location.href = 'inbox.php'; 
+                });
+        });
+    }
+
+    // Auto scroll to bottom on load
+    if (historyDiv) {
+        historyDiv.scrollTop = historyDiv.scrollHeight;
+    }
+
+    // --- SINGLE 10-SECOND BACKGROUND SYNC ENGINE ---
+    setInterval(function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentChat = urlParams.get('chat');
+        const cacheBuster = new Date().getTime();
+
+        const targetUrl = currentChat 
+            ? 'inbox.php?chat=' + encodeURIComponent(currentChat) + '&t=' + cacheBuster
+            : 'inbox.php?t=' + cacheBuster;
+
+        fetch(targetUrl)
+            .then(response => {
+                if (!response.ok) throw new Error('HTTP status ' + response.status);
+                return response.text();
+            })
+            .then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+
+                // Update Active Chat Messages
+                const newHistory = doc.getElementById('msg-history');
+                const historyDiv = document.getElementById('msg-history');
+                
+                if (newHistory && historyDiv) {
+                    const isScrolledToBottom = historyDiv.scrollHeight - historyDiv.clientHeight <= historyDiv.scrollTop + 50;
+                    historyDiv.innerHTML = newHistory.innerHTML;
+                    if (isScrolledToBottom) {
+                        historyDiv.scrollTop = historyDiv.scrollHeight;
+                    }
+                }
+
+                // Update Sidebar Chat List
+                const newSidebar = doc.querySelector('.chat-list') || doc.querySelector('.sidebar');
+                const currentSidebar = document.querySelector('.chat-list') || document.querySelector('.sidebar');
+                
+                if (newSidebar && currentSidebar) {
+                    currentSidebar.innerHTML = newSidebar.innerHTML;
+                    applyFilters();
+                }
+            })
+            .catch(error => console.error('Sync Error:', error));
+    }, 10000); // Running every 10s prevents server 504 timeouts
 });
 </script>
 </body>
