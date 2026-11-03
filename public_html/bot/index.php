@@ -361,7 +361,7 @@ foreach ($webhook_messages as $webhook_message) {
             ["id" => "cat_higher", "title" => "🎓 Higher Certificates"],
             ["id" => "cat_1year", "title" => "📅 One Year Courses"],
             ["id" => "cat_short", "title" => "⏱️ Short Courses"],
-            ["id" => "cat_self", "title" => "💻 Self-Paced Courses"],
+            ["id" => "cat_self", "title" => "💻 Flexible Online"],
             ["id" => "cat_more", "title" => "➕ More Programmes"],
             ["id" => "course_calendar", "title" => "🗓️ Course Dates"],
             ["id" => "admissions_info", "title" => "📝 Admissions & RPL"]
@@ -402,11 +402,11 @@ foreach ($webhook_messages as $webhook_message) {
     }
 
     elseif ($payload == 'property_course_catalog') {
-        send_text($from, "Explore CEA's self-paced property short courses and bundles:\nhttps://cea.ac.za/property-short-courses-deparment/", $access_token, $phone_number_id, $reminder);
+        send_text($from, "Explore CEA's property short courses and bundles:\nhttps://cea.ac.za/property-short-courses-deparment/", $access_token, $phone_number_id, $reminder);
     }
 
     elseif ($payload == 'online_course_catalog') {
-        send_text($from, "Explore CEA's certified online courses, including introductory and full self-paced programmes:\nhttps://cea.ac.za/self-paced-courses2/", $access_token, $phone_number_id, $reminder);
+        send_text($from, "Explore CEA's certified online courses, including introductory courses and Flexible Online Learning programmes:\nhttps://cea.ac.za/self-paced-courses2/", $access_token, $phone_number_id, $reminder);
     }
 
     elseif ($payload == 'cpd_course_catalog') {
@@ -453,10 +453,10 @@ foreach ($webhook_messages as $webhook_message) {
     }
 
     elseif ($payload == 'cat_self') {
-        send_list($from, "Self Paced Courses", "Select a course:", "Courses", [
-            ["id" => "opt_spc_cpm", "title" => "CPM (Self Paced)"],
-            ["id" => "opt_spc_fm", "title" => "FM (Self Paced)"],
-            ["id" => "opt_spc_pd", "title" => "Prop Dev (Self Paced)"]
+        send_list($from, "Flexible Online Learning", "Choose a programme:", "Courses", [
+            ["id" => "opt_spc_cpm", "title" => "CPM - Flexible Online"],
+            ["id" => "opt_spc_fm", "title" => "FM - Flexible Online"],
+            ["id" => "opt_spc_pd", "title" => "Property Dev - Flex"]
         ], "view_categories", $access_token, $phone_number_id, $reminder);
     }
 
@@ -590,12 +590,12 @@ foreach ($webhook_messages as $webhook_message) {
         }
 
         if ($lead_action_payload === 'talk_human' && !$agent_available) {
-            $ack = "Our consultants are offline. Your request has been recorded, and the team is available Monday to Friday, 7:30 am to 4:30 pm (South Africa time). You can continue browsing courses here.";
+            $ack = "Your request has been recorded. A member of our team will contact you as soon as possible. Our consultants are available Monday to Friday, 7:30 am to 4:30 pm (South Africa time).";
         } elseif ($lead_action_payload !== 'talk_human' && !$agent_available) {
             $application_url = "https://cea.ac.za/lets-get-you-started/";
-            $ack = "Your interest in *" . get_course_title($course_code) . "* has been recorded. To start your application enquiry, complete CEA's online form and select this programme:\n$application_url\n\nThis form records your contact details and course interest; it does not itself submit a formal application. Our consultants are offline until the next business day. You can keep messaging me to browse other courses.";
+            $ack = "Your interest in *" . get_course_title($course_code) . "* has been recorded. A member of our team will contact you as soon as possible. To start your application enquiry, complete CEA's online form and select this programme:\n$application_url\n\nThis form records your contact details and course interest; it does not itself submit a formal application.";
         } else {
-            $ack = ($lead_action_payload == 'talk_human') ? "I've alerted the team! 🙋‍♂️ A consultant will assist you shortly." : "🎉 Interest noted! A consultant will join this chat shortly to assist with your application. Please wait patiently.";
+            $ack = ($lead_action_payload == 'talk_human') ? "I've alerted the team! 🙋‍♂️ A member of our team will contact you as soon as possible." : "🎉 Your application interest has been recorded. A member of our team will contact you as soon as possible.";
         }
         send_text($from, $ack, $access_token, $phone_number_id, "");
     }
@@ -997,7 +997,7 @@ function get_course_title($code) {
         "opt_sc_cpm5" => "Short: 5 Day Const Project Mgt", "opt_sc_cpm3" => "Short: 3 Day Const Project Mgt", "opt_sc_cpm1" => "Short: 1 Day Const Project Mgt",
         "opt_sc_ct5" => "Short: 5 Day Construction Technology", "opt_sc_cpmc5" => "Short: 5 Day Const Project Meas & Control",
         "opt_sp_pd5" => "Short: 5 Day Property Development", "opt_sp_pd3" => "Short: 3 Day Property Development", "opt_sp_pd1" => "Short: 1 Day Property Development",
-        "opt_spc_cpm" => "Self-Paced: Construction Project Management", "opt_spc_fm" => "Self-Paced: Facilities Management", "opt_spc_pd" => "Self-Paced: Property Development"
+        "opt_spc_cpm" => "Flexible Online: Construction Project Management", "opt_spc_fm" => "Flexible Online: Facilities Management", "opt_spc_pd" => "Flexible Online: Property Development"
     ];
     return isset($titles[$code]) ? $titles[$code] : "Selected Course";
 }
@@ -1071,13 +1071,13 @@ function get_course_info($code) {
         $info['desc'] = "This intensive course aims to offer public and private sector practitioners and employees a comprehensive understanding of the foundational concepts essential to property development.";
         $info['duration'] = "1 day";
     } elseif ($code == 'opt_spc_cpm') {
-        $info['desc'] = "This self-paced, three-month online course prepares participants for management roles in the construction industry using contemporary, practical methodologies. Led by experienced lecturers, the program includes 60 hours of study materials (handbooks and e-lectures delivered via email) and 20 hours of structured, assessed assignments. All comprehensive study materials are included in the course cost.";
+        $info['desc'] = "A flexible online programme with course materials and structured assignments, plus a monthly one-on-one Q&A session with a course tutor for questions and assignment guidance.";
         $info['duration'] = "4 months";
     } elseif ($code == 'opt_spc_fm') {
-        $info['desc'] = "The Facilities Management Programme (FMP) is an intensive, self-paced online course for first and middle management built environment practitioners. Focusing on innovative thinking and entrepreneurship, it has helped over 1,300 local and international delegates launch successful FM careers. Delivered over three months via email, the program includes 60 hours of study materials (handbooks and e-lectures) and 20 hours of structured, assessed assignments with expert feedback.";
+        $info['desc'] = "A flexible online programme with course materials and structured assignments, plus a monthly one-on-one Q&A session with a course tutor for questions and assignment guidance.";
         $info['duration'] = "4 months";
     } elseif ($code == 'opt_spc_pd') {
-        $info['desc'] = "This intensive, three-month online course provides public and private sector practitioners with a comprehensive foundation in property development. Designed to equip participants with the essential skills for a profitable career in the sector, the self-paced program includes 60 hours of study materials (handbooks and e-lectures delivered via email) and 20 hours of assessed assignments. All comprehensive study materials are included in the course fee.";
+        $info['desc'] = "A flexible online programme with course materials and structured assignments, plus a monthly one-on-one Q&A session with a course tutor for questions and assignment guidance.";
         $info['duration'] = "4 months";
     }
     return $info;
