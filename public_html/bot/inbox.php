@@ -1,12 +1,56 @@
 <?php
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+error_reporting(E_ALL);
 session_start();
 
-// --- 1. SET YOUR USERS AND PASSWORDS HERE ---
-$allowed_users = [
-    'barry'  => 'BarryPass2026',
-    'george' => 'GeorgePass2026',
-    'admin'  => '2026' // Change 'admin' to your actual name if you prefer
+$account_home = '/usr/home/' . basename(dirname(__DIR__));
+$config_path = $account_home . DIRECTORY_SEPARATOR . 'cea-bot-config.php';
+if (!is_file($config_path) || !is_readable($config_path)) {
+    error_log("Required inbox configuration file is missing or unreadable at the expected private path.");
+    http_response_code(500);
+    exit('Service temporarily unavailable.');
+}
+
+$bot_config = require $config_path;
+if (!is_array($bot_config)) {
+    error_log("Inbox configuration file did not return an array.");
+    http_response_code(500);
+    exit('Service temporarily unavailable.');
+}
+$required_config = [
+    'database' => ['host', 'username', 'password', 'name'],
+    'whatsapp' => ['access_token', 'phone_number_id'],
+    'inbox_users' => []
 ];
+foreach ($required_config as $section => $keys) {
+    if (!isset($bot_config[$section]) || !is_array($bot_config[$section])) {
+        error_log("Required inbox configuration section is missing or invalid: " . $section);
+        http_response_code(500);
+        exit('Service temporarily unavailable.');
+    }
+    foreach ($keys as $key) {
+        if (!isset($bot_config[$section][$key]) || !is_string($bot_config[$section][$key]) || $bot_config[$section][$key] === '') {
+            error_log("Required inbox configuration key is missing or invalid: " . $section . "." . $key);
+            http_response_code(500);
+            exit('Service temporarily unavailable.');
+        }
+    }
+}
+
+$allowed_users = $bot_config['inbox_users'];
+if ($allowed_users === []) {
+    error_log("No inbox users are configured.");
+    http_response_code(500);
+    exit('Service temporarily unavailable.');
+}
+foreach ($allowed_users as $username => $password_hash) {
+    if (!is_string($username) || !is_string($password_hash) || password_get_info($password_hash)['algo'] === null) {
+        error_log("Inbox user configuration contains an invalid password hash.");
+        http_response_code(500);
+        exit('Service temporarily unavailable.');
+    }
+}
 
 // --- 2. LOGOUT LOGIC ---
 if (isset($_GET['logout'])) {
@@ -22,7 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['username']) && isset($
     $pass = $_POST['password'];
 
     // Check if the username exists and the password matches
-    if (array_key_exists($user, $allowed_users) && $allowed_users[$user] === $pass) {
+    if (array_key_exists($user, $allowed_users) && password_verify($pass, $allowed_users[$user])) {
+        session_regenerate_id(true);
         $_SESSION['logged_in'] = true;
         $_SESSION['active_user'] = $user;
         header("Location: inbox.php"); // Refresh the page to clear the form submission
@@ -69,16 +114,19 @@ if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
 
 $current_view = $_GET['view'] ?? 'all';
 
-ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
-$db_host = 'sql3.jnb1.host-h.net';
-$db_user = 'wwwcea_bot1';
-$db_pass = 'CareerExcelAcademy2026';
-$db_name = 'ceabot_db';
+$db_host = $bot_config['database']['host'];
+$db_user = $bot_config['database']['username'];
+$db_pass = $bot_config['database']['password'];
+$db_name = $bot_config['database']['name'];
 
 $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
-if ($conn->connect_error) { die("Connection Failed: " . $conn->connect_error); }
+if ($conn->connect_error) {
+    error_log("Inbox database connection failed: " . $conn->connect_error);
+    http_response_code(500);
+    exit('Service temporarily unavailable.');
+}
 
 // --- TIME FORMATTING FUNCTION ---
 function formatChatDate($timestamp) {
@@ -160,8 +208,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit();
     } 
 
-    $access_token = 'EAANeDzAb8iQBRSOhmrZAc3UXvt7uEquOj67ZCVKlS4ZBHxmJkIuLrWNoOTPWmdUgQcthaSVGMU8pu4vLgILge4x6ry62N0dLWrK7RoRb39ZC5ijZAZBZB8MIXGTFKslfVVQxo18cikxZB4ooSvI0f5vhidHW3PRNkZCOEVKSc5DSl6CDXgLCRBXLrBEgX2wHlVgZDZD'; 
-    $phone_number_id = '1192797650583688'; 
+    $access_token = $bot_config['whatsapp']['access_token'];
+    $phone_number_id = $bot_config['whatsapp']['phone_number_id'];
     $url = "https://graph.facebook.com/v17.0/" . $phone_number_id . "/messages";
 
     $message_type = 'text';
@@ -902,15 +950,14 @@ if ($active) {
                     $last_msg_id = $last_msg['message_id']; 
                     
                     // Define your token here so this block can use it
-                    $access_token = 'EAANeDzAb8iQBRSOhmrZAc3UXvt7uEquOj67ZCVKlS4ZBHxmJkIuLrWNoOTPWmdUgQcthaSVGMU8pu4vLgILge4x6ry62N0dLWrK7RoRb39ZC5ijZAZBZB8MIXGTFKslfVVQxo18cikxZB4ooSvI0f5vhidHW3PRNkZCOEVKSc5DSl6CDXgLCRBXLrBEgX2wHlVgZDZD'; 
-
                     $read_data = [
                         'messaging_product' => 'whatsapp',
                         'status' => 'read',
                         'message_id' => $last_msg_id
                     ];
 
-                    $ch = curl_init("https://graph.facebook.com/v17.0/1192797650583688/messages");
+                    $ch = curl_init("https://graph.facebook.com/v17.0/" . $bot_config['whatsapp']['phone_number_id'] . "/messages");
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
                     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
                     curl_setopt($ch, CURLOPT_POST, true);
                     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($read_data));

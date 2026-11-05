@@ -2,16 +2,47 @@
 // 1. MASTER ERROR LOGGER
 ini_set('display_errors', 0); 
 ini_set('log_errors', 1);
-ini_set('error_log', __DIR__ . '/php_error_log.txt');
 error_reporting(E_ALL);
 
 $input = file_get_contents('php://input');
 
-// --- DATABASE CONFIGURATION ---
-$db_host = 'sql3.jnb1.host-h.net';
-$db_user = 'wwwcea_bot1';
-$db_pass = 'CareerExcelAcademy2026';
-$db_name = 'ceabot_db';
+$account_home = '/usr/home/' . basename(dirname(__DIR__));
+$config_path = $account_home . DIRECTORY_SEPARATOR . 'cea-bot-config.php';
+if (!is_file($config_path) || !is_readable($config_path)) {
+    error_log("Required bot configuration file is missing or unreadable at the expected private path.");
+    http_response_code(500);
+    exit('Service temporarily unavailable.');
+}
+
+$bot_config = require $config_path;
+if (!is_array($bot_config)) {
+    error_log("Bot configuration file did not return an array.");
+    http_response_code(500);
+    exit('Service temporarily unavailable.');
+}
+$required_config = [
+    'database' => ['host', 'username', 'password', 'name'],
+    'whatsapp' => ['access_token', 'phone_number_id', 'verify_token']
+];
+foreach ($required_config as $section => $keys) {
+    if (!isset($bot_config[$section]) || !is_array($bot_config[$section])) {
+        error_log("Required bot configuration section is missing or invalid: " . $section);
+        http_response_code(500);
+        exit('Service temporarily unavailable.');
+    }
+    foreach ($keys as $key) {
+        if (!isset($bot_config[$section][$key]) || !is_string($bot_config[$section][$key]) || $bot_config[$section][$key] === '') {
+            error_log("Required bot configuration key is missing or invalid: " . $section . "." . $key);
+            http_response_code(500);
+            exit('Service temporarily unavailable.');
+        }
+    }
+}
+
+$db_host = $bot_config['database']['host'];
+$db_user = $bot_config['database']['username'];
+$db_pass = $bot_config['database']['password'];
+$db_name = $bot_config['database']['name'];
 
 $conn = null;
 try {
@@ -27,9 +58,9 @@ try {
 }
 
 // --- CONFIGURATION ---
-$access_token = 'EAANeDzAb8iQBRSOhmrZAc3UXvt7uEquOj67ZCVKlS4ZBHxmJkIuLrWNoOTPWmdUgQcthaSVGMU8pu4vLgILge4x6ry62N0dLWrK7RoRb39ZC5ijZAZBZB8MIXGTFKslfVVQxo18cikxZB4ooSvI0f5vhidHW3PRNkZCOEVKSc5DSl6CDXgLCRBXLrBEgX2wHlVgZDZD';
-$phone_number_id = '1192797650583688';
-$verify_token = 'CEA_Secret_2026';
+$access_token = $bot_config['whatsapp']['access_token'];
+$phone_number_id = $bot_config['whatsapp']['phone_number_id'];
+$verify_token = $bot_config['whatsapp']['verify_token'];
 
 // --- DEPARTMENT ROUTING ---
 $george_admin = '27849468033'; 
